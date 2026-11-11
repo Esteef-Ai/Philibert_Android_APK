@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Philibert answers on the computer's Tailscale address over plain http: Tailscale itself
+     encrypts the link (WireGuard), and the relay only accepts devices on the tailnet. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
