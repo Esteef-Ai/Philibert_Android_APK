@@ -309,7 +309,13 @@ class MainActivity : Activity() {
             text = "Voice"; setTextColor(getColor(R.color.txt)); textSize = 15f
             setPadding(0, (12 * dp).toInt(), 0, (2 * dp).toInt())
         })
-        note(Prefs.talkVoice(this).ifEmpty { "The best voice on the phone, chosen for you" })
+        note(Prefs.talkVoice(this).let {
+            when {
+                it.isEmpty() -> "Automatic: your computer's natural voice (Kokoro) when it has one, else the phone's best"
+                it.startsWith("kokoro:") -> "Your computer's natural voice: " + it.removePrefix("kokoro:")
+                else -> "The phone's voice: $it"
+            }
+        })
         val vrow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         vrow.addView(Button(this).apply { text = "Choose a voice"; isAllCaps = false; setOnClickListener { chooseVoice() } },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -321,7 +327,7 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         col.addView(vrow)
-        note("Voices marked \"online\" are Google's most natural ones but need mobile data; the others work anywhere. More voices: Get more voices > Speech Services by Google > Install voice data.")
+        note("The \"your computer\" voices are the most natural - Kokoro, made on your computer and sent to the phone sentence by sentence. Phone voices marked \"online\" need mobile data; the others work anywhere.")
 
         val scroll = ScrollView(this).apply {
             setBackgroundColor(getColor(R.color.bg))
@@ -334,49 +340,72 @@ class MainActivity : Activity() {
     // ---- Talk's voice --------------------------------------------------------------------------------------
     private var tts: android.speech.tts.TextToSpeech? = null
 
-    /** Every voice for the phone's language; tapping one plays it, OK keeps it. */
+    /** Every voice: the computer's natural (Kokoro) voices first, then the phone's own. Tapping one
+     *  plays it; "Use this voice" keeps it. */
     private fun chooseVoice() {
         tts?.shutdown()
+        thread {
+            val (code, info) = Net.post(this, "voice_info", JSONObject())
+            val kv = mutableListOf<Pair<String, String>>()            // (kokoro id, label)
+            if (code == 200 && info?.optBoolean("kokoro") == true) {
+                val a = info.optJSONArray("voices")
+                for (i in 0 until (a?.length() ?: 0)) a!!.getJSONObject(i).let { kv.add(it.optString("id") to it.optString("label")) }
+            }
+            ui.post { voiceDialog(kv) }
+        }
+    }
+
+    private fun voiceDialog(kv: List<Pair<String, String>>) {
         var t: android.speech.tts.TextToSpeech? = null
         t = android.speech.tts.TextToSpeech(this) { status ->
             ui.post {
                 val e = t ?: return@post
-                if (status != android.speech.tts.TextToSpeech.SUCCESS) {
-                    android.widget.Toast.makeText(this, "The phone's text-to-speech isn't working.", android.widget.Toast.LENGTH_LONG).show()
-                    return@post
-                }
                 val lang = java.util.Locale.getDefault().language
-                val voices = (e.voices ?: emptySet()).filter {
+                val pv = if (status != android.speech.tts.TextToSpeech.SUCCESS) emptyList() else (e.voices ?: emptySet()).filter {
                     it.locale.language == lang &&
                         !it.features.contains(android.speech.tts.TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)
                 }.sortedWith(compareBy<android.speech.tts.Voice>({ it.locale.country != java.util.Locale.getDefault().country },
                     { it.isNetworkConnectionRequired }, { -it.quality }, { it.name }))
-                if (voices.isEmpty()) {
-                    android.widget.Toast.makeText(this, "No voices for this language - use Get more voices.", android.widget.Toast.LENGTH_LONG).show()
-                    return@post
+                // one list: (what to save, label)
+                val items = kv.map { ("kokoro:" + it.first) to (it.second + " · your computer") } +
+                    pv.mapIndexed { i, v ->
+                        val code = v.name.split('-').getOrNull(3)?.uppercase() ?: v.name
+                        v.name to ("Phone ${i + 1} · ${v.locale.displayCountry.ifEmpty { v.locale.displayLanguage }} · $code" +
+                            (if (v.isNetworkConnectionRequired) " · online" else "") +
+                            (if (v.quality >= android.speech.tts.Voice.QUALITY_VERY_HIGH) " · best" else ""))
+                    }
+                if (items.isEmpty()) {
+                    android.widget.Toast.makeText(this, "No voices found - use Get more voices.", android.widget.Toast.LENGTH_LONG).show()
+                    e.shutdown(); return@post
                 }
-                val labels = voices.mapIndexed { i, v ->
-                    val code = v.name.split('-').getOrNull(3)?.uppercase() ?: v.name
-                    "${i + 1}. ${v.locale.displayCountry.ifEmpty { v.locale.displayLanguage }} · $code" +
-                        (if (v.isNetworkConnectionRequired) " · online" else "") +
-                        (if (v.quality >= android.speech.tts.Voice.QUALITY_VERY_HIGH) " · best" else "")
-                }.toTypedArray()
-                var pick = voices.indexOfFirst { it.name == Prefs.talkVoice(this) }
+                val sample = "Hi, I'm Philibert. Okay, so what are we working on today?"
+                var preview: KokoroSpeaker? = null
+                var pick = items.indexOfFirst { it.first == Prefs.talkVoice(this) }
                 e.setSpeechRate(Prefs.talkRate(this))
+                fun done() { preview?.shutdown(); e.shutdown() }
                 android.app.AlertDialog.Builder(this)
                     .setTitle("Philibert's voice")
-                    .setSingleChoiceItems(labels, pick) { _, i ->
+                    .setSingleChoiceItems(items.map { it.second }.toTypedArray(), pick) { _, i ->
                         pick = i
-                        e.voice = voices[i]
-                        e.speak("Hi, I'm Philibert. Okay, so what are we working on today?",
-                            android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "preview")
+                        e.stop(); preview?.stop()
+                        val key = items[i].first
+                        if (key.startsWith("kokoro:")) {
+                            if (preview == null) preview = KokoroSpeaker(this, { _, _ -> }, { _, _, l -> l.countDown() })
+                            preview!!.voice = key.removePrefix("kokoro:")
+                            preview!!.speed = Prefs.talkRate(this)
+                            preview!!.speak(sample, "preview")
+                        } else {
+                            pv.firstOrNull { it.name == key }?.let { e.voice = it }
+                            e.speak(sample, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "preview")
+                        }
                     }
                     .setPositiveButton("Use this voice") { _, _ ->
-                        if (pick >= 0) Prefs.setTalkVoice(this, voices[pick].name)
-                        e.shutdown(); showSetup()
+                        if (pick >= 0) Prefs.setTalkVoice(this, items[pick].first)
+                        done(); showSetup()
                     }
-                    .setNeutralButton("Automatic") { _, _ -> Prefs.setTalkVoice(this, ""); e.shutdown(); showSetup() }
-                    .setNegativeButton("Cancel") { _, _ -> e.shutdown() }
+                    .setNeutralButton("Automatic") { _, _ -> Prefs.setTalkVoice(this, ""); done(); showSetup() }
+                    .setNegativeButton("Cancel") { _, _ -> done() }
+                    .setOnCancelListener { done() }
                     .show()
             }
         }

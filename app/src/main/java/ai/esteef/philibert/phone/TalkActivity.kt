@@ -36,6 +36,8 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 
 /**
@@ -68,6 +70,8 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
     private var ttsReady = false
     private var focus: AudioFocusRequest? = null
     private val barge = BargeIn { ui.post { bargedIn() } }
+    private var kokoro: KokoroSpeaker? = null                 // the computer's natural voice, when it has one
+    private val phoneSays = ConcurrentHashMap<String, CountDownLatch>()   // sentences the phone's voice stands in for
 
     private val history = mutableListOf<JSONObject>()      // {role, content}
     private var model = ""
@@ -121,6 +125,7 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         job = null
         barge.stop()
         sr?.destroy()
+        kokoro?.shutdown()
         tts?.shutdown()
         unduck()
         super.onDestroy()
@@ -258,11 +263,39 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             // the first sentence of a reply starting: learn how loud Philibert's own voice comes back
             override fun onStart(id: String?) { if (id != null && id.endsWith("_1")) barge.relearnNow() }
-            override fun onDone(id: String?) { ui.post { said(id) } }
+            override fun onDone(id: String?) {
+                phoneSays.remove(id ?: "")?.let { it.countDown(); return }   // stood in for Kokoro: its player goes on
+                ui.post { said(id) }
+            }
             @Deprecated("Deprecated in Java")
-            override fun onError(id: String?) { ui.post { said(id) } }
+            override fun onError(id: String?) {
+                phoneSays.remove(id ?: "")?.let { it.countDown(); return }
+                ui.post { said(id) }
+            }
         })
         ttsReady = true
+        // the computer's natural voice (Kokoro) unless a phone voice was chosen in Setup
+        val chosen = Prefs.talkVoice(this)
+        if (chosen.isNotEmpty() && !chosen.startsWith("kokoro:")) { begin(); return }
+        state(S.IDLE, "Getting ready…")
+        thread {
+            val (code, r) = Net.post(this, "voice_info", JSONObject())
+            ui.post {
+                if (code == 200 && r?.optBoolean("kokoro") == true) {
+                    kokoro = KokoroSpeaker(this,
+                        { ev, id -> if (ev == "start") { if (id.endsWith("_1")) barge.relearnNow() } else ui.post { said(id) } },
+                        { text, id, latch -> phoneSays[id] = latch; tts?.speak(spoken(text), TextToSpeech.QUEUE_ADD, null, id) }
+                    ).apply {
+                        voice = chosen.removePrefix("kokoro:").ifEmpty { r.optString("default", "af_heart") }
+                        speed = Prefs.talkRate(this@TalkActivity)
+                    }
+                }
+                begin()
+            }
+        }
+    }
+
+    private fun begin() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) start()
     }
 
@@ -295,7 +328,8 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         if (t.isBlank()) { if (last && spoken >= queued) ui.postDelayed({ if (s == S.SPEAKING) listen() }, 200); return }
         duck()
         queued++
-        tts?.speak(t, TextToSpeech.QUEUE_ADD, null, "t${turn}_$queued")
+        val id = "t${turn}_$queued"
+        kokoro?.speak(t, id) ?: tts?.speak(t, TextToSpeech.QUEUE_ADD, null, id)
     }
 
     private fun said(id: String?) {
@@ -305,6 +339,14 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
             unduck()
             ui.postDelayed({ if (s == S.SPEAKING) listen() }, 250)
         }
+    }
+
+    /** Silence now, whichever voice is speaking. */
+    private fun hush() {
+        kokoro?.stop()
+        tts?.stop()
+        phoneSays.values.forEach { it.countDown() }
+        phoneSays.clear()
     }
 
     /** Markdown and links out, so the voice reads sentences, not symbols. */
@@ -562,7 +604,7 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
     private fun interruptReply() {
         val wasAnswering = s == S.SPEAKING || s == S.THINKING
         turn++
-        tts?.stop()
+        hush()
         unduck()
         job?.let { j -> thread { Net.post(this, "cancel", JSONObject().put("job", j)) } }
         job = null
@@ -692,7 +734,7 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
     /** Reads the plan aloud. andListen (said "wrap it up"): its Summary, "anything else?", then back to
      *  listening. The button: the whole plan, and it stays on the plan. */
     private fun speakSummary(md: String, lead: String, andListen: Boolean) {
-        tts?.stop()
+        hush()
         turn++; queued = 0; spoken = 0; replyDone = false
         val sec = Regex("(?s)##\\s*Summary\\s*\\n(.*?)(\\n##|$)").find(md)?.groupValues?.get(1)?.trim()
         val gist = if (andListen) (sec ?: md.lineSequence().filter { !it.trim().startsWith("#") }.joinToString(" ").take(600))
