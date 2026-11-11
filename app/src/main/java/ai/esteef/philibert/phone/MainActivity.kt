@@ -17,7 +17,9 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -31,12 +33,12 @@ import org.json.JSONObject
 import kotlin.concurrent.thread
 
 /**
- * The Philibert chat (the computer's own phone page, in a WebView) with a status line on top, and
- * a Setup panel: the address to pair with, and each permission Philibert needs to act on the phone.
+ * The Philibert chat: the computer's own phone page in a WebView, whose header (Esteef AI ·
+ * Philibert) has the app's Talk and Setup buttons (window.PhilibertApp). Setup: the address to
+ * pair with, each permission Philibert needs to act on the phone, and Talk's voice settings.
  */
 class MainActivity : Activity() {
     private lateinit var web: WebView
-    private lateinit var status: TextView
     private lateinit var body: FrameLayout
     private var setup: View? = null
     private val ui = Handler(Looper.getMainLooper())
@@ -45,47 +47,48 @@ class MainActivity : Activity() {
     private val PERMS = arrayOf(
         Manifest.permission.SEND_SMS, Manifest.permission.CALL_PHONE, Manifest.permission.READ_CONTACTS,
         Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION,
-        Manifest.permission.POST_NOTIFICATIONS)
+        Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.RECORD_AUDIO)
 
-    @SuppressLint("SetJavaScriptEnabled")
+    /** What the chat page can ask of the app. */
+    inner class Bridge {
+        @JavascriptInterface
+        fun talk(model: String) {
+            ui.post {
+                startActivity(Intent(this@MainActivity, TalkActivity::class.java).putExtra("model", model))
+            }
+        }
+
+        @JavascriptInterface
+        fun setup() { ui.post { showSetup() } }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Notifs.setup(this)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        body = FrameLayout(this).apply {
             setBackgroundColor(getColor(R.color.bg))
             fitsSystemWindows = true
         }
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding((14 * dp).toInt(), (4 * dp).toInt(), (6 * dp).toInt(), (4 * dp).toInt())
-            setBackgroundColor(getColor(R.color.panel))
-        }
-        status = TextView(this).apply {
-            setTextColor(getColor(R.color.dim))
-            textSize = 12.5f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        bar.addView(status)
-        bar.addView(Button(this).apply {
-            text = "Setup"
-            isAllCaps = false
-            setOnClickListener { showSetup() }
-        })
-        root.addView(bar)
-        body = FrameLayout(this)
-        root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
-            webViewClient = WebViewClient()
             webChromeClient = WebChromeClient()
+            webViewClient = object : WebViewClient() {
+                // the chat stays in the app; any other link opens in the browser
+                override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
+                    val u = req.url.toString()
+                    if (u.startsWith(Prefs.address(this@MainActivity))) return false
+                    try { startActivity(Intent(Intent.ACTION_VIEW, req.url)) } catch (e: Exception) { }
+                    return true
+                }
+            }
             setBackgroundColor(getColor(R.color.bg))
+            addJavascriptInterface(Bridge(), "PhilibertApp")
         }
         body.addView(web)
-        setContentView(root)
+        setContentView(body)
 
         if (Prefs.address(this).isEmpty()) showSetup() else {
             web.loadUrl(Prefs.address(this))
@@ -93,7 +96,6 @@ class MainActivity : Activity() {
         }
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        tick()
     }
 
     override fun onResume() {
@@ -116,23 +118,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---- the status line ------------------------------------------------------------------------------
-    private fun tick() {
-        val s = when {
-            Prefs.address(this).isEmpty() -> "Not paired with your computer yet"
-            !Prefs.handsOn(this) -> "● Chat only - acting on the phone is switched off"
-            else -> when (HandsService.state) {
-                "connected" -> "● Connected" + if (handsOn()) " · Philibert can act on this phone" else " · turn on Philibert hands in Setup"
-                "connecting" -> "○ Connecting to your computer…"
-                "unreachable" -> "○ Can't reach your computer - Philibert running? Tailscale on?"
-                else -> "○ Not connected"
-            }
-        }
-        status.text = s
-        status.setTextColor(getColor(if (s.startsWith("● Connected") && handsOn()) R.color.green else R.color.dim))
-        ui.postDelayed({ tick() }, 1500)
-    }
-
     // ---- what is switched on ----------------------------------------------------------------------------
     private fun handsOn(): Boolean {
         if (PhoneAccessibility.me != null) return true
@@ -147,6 +132,17 @@ class MainActivity : Activity() {
 
     private fun batteryOn(): Boolean = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
 
+    private fun connection(): String = when {
+        Prefs.address(this).isEmpty() -> "Not paired with your computer yet"
+        !Prefs.handsOn(this) -> "Chat only - acting on the phone is switched off"
+        else -> when (HandsService.state) {
+            "connected" -> "Connected to your computer" + if (handsOn()) " - Philibert can act on this phone" else ""
+            "connecting" -> "Connecting to your computer…"
+            "unreachable" -> "Can't reach your computer - is Philibert running, and Tailscale on?"
+            else -> "Not connected"
+        }
+    }
+
     // ---- setup ------------------------------------------------------------------------------------------
     private fun hideSetup() {
         setup?.let { body.removeView(it) }
@@ -158,7 +154,7 @@ class MainActivity : Activity() {
         val pad = (18 * dp).toInt()
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad * 2)
+            setPadding(pad, pad / 2, pad, pad * 2)
         }
         fun title(t: String) = col.addView(TextView(this).apply {
             text = t; setTextColor(getColor(R.color.txt)); textSize = 18f; typeface = Typeface.DEFAULT_BOLD
@@ -186,11 +182,42 @@ class MainActivity : Activity() {
             if (!on) r.addView(Button(this).apply { text = button; isAllCaps = false; setOnClickListener { go() } })
             col.addView(r)
         }
+        /** A row of choices; the chosen one is marked. */
+        fun choices(label: String, opts: List<Pair<String, Any>>, current: Any, pick: (Any) -> Unit) {
+            col.addView(TextView(this).apply {
+                text = label; setTextColor(getColor(R.color.txt)); textSize = 15f
+                setPadding(0, (8 * dp).toInt(), 0, (2 * dp).toInt())
+            })
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            opts.forEach { (name, v) ->
+                r.addView(Button(this).apply {
+                    text = if (v == current) "✓ $name" else name
+                    isAllCaps = false
+                    setOnClickListener { pick(v); showSetup() }
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            col.addView(r)
+        }
 
-        col.addView(TextView(this).apply {
-            text = "Philibert"; setTextColor(getColor(R.color.cyan)); textSize = 26f; typeface = Typeface.DEFAULT_BOLD
+        // the panel's own top bar: the brand, and a close button once paired
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val brand = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        brand.addView(TextView(this).apply {
+            text = "ESTEEF AI"; setTextColor(getColor(R.color.cyan)); textSize = 10f
+            typeface = Typeface.DEFAULT_BOLD; letterSpacing = 0.18f
         })
-        note("Your assistant runs on your own computer. This app is its chat on the phone - and, when you allow it, its hands on the phone.")
+        brand.addView(TextView(this).apply {
+            text = "Philibert · Setup"; setTextColor(getColor(R.color.txt)); textSize = 22f; typeface = Typeface.DEFAULT_BOLD
+        })
+        top.addView(brand)
+        if (Prefs.address(this).isNotEmpty()) top.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+            text = "✕"; textSize = 20f; setTextColor(getColor(R.color.dim)); setOnClickListener { hideSetup() }
+        })
+        col.addView(top)
+        note(connection())
 
         title("1. Pair with your computer")
         note("On the computer, Philibert shows a phone address where you turned the phone chat on (it starts with http://100. and ends in /phone/). Copy it here. Tailscale has to be on, on both.")
@@ -219,6 +246,7 @@ class MainActivity : Activity() {
                             HandsService.stop(this@MainActivity)
                             HandsService.start(this@MainActivity)
                             web.loadUrl(a)
+                            ui.postDelayed({ hideSetup() }, 900)
                         } else {
                             Prefs.setAddress(this@MainActivity, old)
                             result.text = if (code == -1) "Nothing answered there. Is Tailscale on (on both), Philibert running, and the phone chat turned on?"
@@ -235,8 +263,8 @@ class MainActivity : Activity() {
             "Accessibility: read the screen, tap, type and scroll when you ask. If Android says it's a restricted setting: " +
                 "Settings > Apps > Philibert > ⋮ (top right) > Allow restricted settings, then come back and try again.",
             "Turn on") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        row("Texts, calls, contacts, location", permsOn(),
-            "So \"text Mom I'm late\" or \"where am I\" work. Texts and calls still ask you first, every time.",
+        row("Microphone, texts, calls, contacts, location", permsOn(),
+            "The microphone is for Talk. Texts and calls still ask you first, every time.",
             "Allow") { requestPermissions(PERMS, 2) }
         row("Read notifications", notificationsOn(),
             "So you can ask \"what did I miss?\".",
@@ -248,12 +276,11 @@ class MainActivity : Activity() {
             val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
             startActivity(i)
         }
-
-        title("3. On or off")
         col.addView(Switch(this).apply {
             text = "Philibert may act on this phone"
             setTextColor(getColor(R.color.txt))
             isChecked = Prefs.handsOn(this@MainActivity)
+            setPadding(0, (10 * dp).toInt(), 0, 0)
             setOnCheckedChangeListener { _, on ->
                 Prefs.setHandsOn(this@MainActivity, on)
                 if (on) HandsService.start(this@MainActivity) else HandsService.stop(this@MainActivity)
@@ -261,10 +288,13 @@ class MainActivity : Activity() {
         })
         note("Off: the chat still works, but Philibert can't do anything on the phone.")
 
-        if (Prefs.address(this).isNotEmpty()) col.addView(Button(this).apply {
-            text = "Back to the chat"
-            setOnClickListener { hideSetup() }
-        })
+        title("3. Talk")
+        note("The waveform button in the chat's top bar starts a spoken conversation with the model chosen there - for brainstorming, in the car too. Tap the orb to cut in, say \"pause\" to stop listening, and say \"wrap it up\" to have the session written up as a plan and saved to your Philibert notes (Brainstorms).")
+        choices("Voice speed", listOf("Slower" to 0.9f, "Normal" to 1.0f, "Brisk" to 1.1f, "Fast" to 1.3f),
+            Prefs.talkRate(this)) { Prefs.setTalkRate(this, it as Float) }
+        choices("Wait after I stop talking", listOf("Short" to 800L, "Normal" to 1300L, "Long" to 2200L, "Longer" to 3500L),
+            Prefs.talkPatience(this)) { Prefs.setTalkPatience(this, it as Long) }
+        note("Longer lets you pause to think mid-idea without Philibert jumping in.")
 
         val scroll = ScrollView(this).apply {
             setBackgroundColor(getColor(R.color.bg))

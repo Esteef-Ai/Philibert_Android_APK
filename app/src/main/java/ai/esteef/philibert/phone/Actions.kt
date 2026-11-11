@@ -205,7 +205,7 @@ object Actions {
         "notify" -> {
             val nm = c.getSystemService(NotificationManager::class.java)
             nm.notify((System.currentTimeMillis() % 100000).toInt() + 1000, Notification.Builder(c, Notifs.CHANNEL_SAY)
-                .setSmallIcon(R.drawable.ic_philibert)
+                .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(a.str("title").ifEmpty { "Philibert" })
                 .setContentText(a.str("message"))
                 .setStyle(Notification.BigTextStyle().bigText(a.str("message")))

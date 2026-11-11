@@ -38,7 +38,7 @@ object Confirm {
         // the notification as well: if Android won't open the question over another app, it's here
         val pi = PendingIntent.getActivity(c, id, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         nm.notify(id, Notification.Builder(c, Notifs.CHANNEL_ASK)
-            .setSmallIcon(R.drawable.ic_philibert)
+            .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("Philibert asks: $title")
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pixel's themed icons: the boombox in one colour (Android tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="23" android:translateY="24.4" android:scaleX="0.31" android:scaleY="0.31">
+        <path android:strokeColor="#FFFFFF" android:strokeWidth="10" android:strokeLineCap="round"
+            android:pathData="M62,62 V46 Q62,34 74,34 H126 Q138,34 138,46 V62" />
+        <path android:fillColor="#FFFFFF" android:fillType="evenOdd"
+            android:pathData="M42,60 H158 Q174,60 174,76 V144 Q174,160 158,160 H42 Q26,160 26,144 V76 Q26,60 42,60z M45,104 a25,25 0 1,0 50,0 a25,25 0 1,0 -50,0z M53,104 a17,17 0 1,0 34,0 a17,17 0 1,0 -34,0z M64,104 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0z M105,104 a25,25 0 1,0 50,0 a25,25 0 1,0 -50,0z M113,104 a17,17 0 1,0 34,0 a17,17 0 1,0 -34,0z M124,104 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M47,160 H61 Q64,160 64,163 V167 Q64,170 61,170 H47 Q44,170 44,167 V163 Q44,160 47,160z M139,160 H153 Q156,160 156,163 V167 Q156,170 153,170 H139 Q136,170 136,167 V163 Q136,160 139,160z" />
+    </group>
+</vector>

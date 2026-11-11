@@ -31,6 +31,22 @@ object Prefs {
     fun handsOn(c: Context): Boolean = sp(c).getBoolean("hands", true)
     fun setHandsOn(c: Context, on: Boolean) = sp(c).edit().putBoolean("hands", on).apply()
 
+    // ---- Talk mode ----
+    fun talkModel(c: Context): String = sp(c).getString("talk_model", "") ?: ""
+    fun setTalkModel(c: Context, m: String) = sp(c).edit().putString("talk_model", m).apply()
+
+    /** The spoken conversation so far ([{role, content}] as JSON), kept until "New talk". */
+    fun talkHistory(c: Context): String = sp(c).getString("talk_history", "[]") ?: "[]"
+    fun setTalkHistory(c: Context, json: String) = sp(c).edit().putString("talk_history", json).apply()
+
+    /** Voice speed: 1.0 is normal. */
+    fun talkRate(c: Context): Float = sp(c).getFloat("talk_rate", 1.1f)
+    fun setTalkRate(c: Context, r: Float) = sp(c).edit().putFloat("talk_rate", r).apply()
+
+    /** How long a pause (ms) ends your turn - longer lets you stop and think mid-idea. */
+    fun talkPatience(c: Context): Long = sp(c).getLong("talk_patience", 1300L)
+    fun setTalkPatience(c: Context, ms: Long) = sp(c).edit().putLong("talk_patience", ms).apply()
+
     /** Whatever was pasted (the sharing address, the phone page, with or without a slash) -> .../phone/ */
     fun normalize(raw: String): String {
         var a = raw.trim().replace(" ", "")
@@ -84,7 +100,7 @@ object Notifs {
 
     fun status(c: Context, text: String): Notification =
         Notification.Builder(c, CHANNEL)
-            .setSmallIcon(R.drawable.ic_philibert)
+            .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("Philibert")
             .setContentText(text)
             .setOngoing(true)
