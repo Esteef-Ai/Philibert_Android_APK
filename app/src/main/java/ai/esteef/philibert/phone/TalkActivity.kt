@@ -67,6 +67,7 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var focus: AudioFocusRequest? = null
+    private val barge = BargeIn { ui.post { bargedIn() } }
 
     private val history = mutableListOf<JSONObject>()      // {role, content}
     private var model = ""
@@ -118,6 +119,7 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         ui.removeCallbacksAndMessages(null)
         job?.let { j -> thread { Net.post(this, "cancel", JSONObject().put("job", j)) } }
         job = null
+        barge.stop()
         sr?.destroy()
         tts?.shutdown()
         unduck()
@@ -231,6 +233,12 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
             else -> OrbView.IDLE
         }
         if (n != S.LISTENING) orb.level = 0f
+        // while Philibert speaks or thinks, the microphone listens for the person cutting in
+        if ((n == S.SPEAKING || n == S.THINKING) && Prefs.bargeIn(this) &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            barge.margin = Prefs.bargeMargin(this).toDouble()
+            barge.start()
+        } else if (barge.active()) barge.stop()
         pauseBtn.text = if (n == S.PAUSED || n == S.IDLE) "Talk" else "Pause"
     }
 
@@ -248,7 +256,8 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         pickVoice(t)
         t.setSpeechRate(Prefs.talkRate(this))
         t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String?) {}
+            // the first sentence of a reply starting: learn how loud Philibert's own voice comes back
+            override fun onStart(id: String?) { if (id != null && id.endsWith("_1")) barge.relearnNow() }
             override fun onDone(id: String?) { ui.post { said(id) } }
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) { ui.post { said(id) } }
@@ -257,9 +266,11 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) start()
     }
 
-    /** The best voice for the phone's language that works without the internet. */
+    /** The voice chosen in Setup, else the best for the phone's language that works without the internet. */
     private fun pickVoice(t: TextToSpeech) {
         try {
+            val chosen = Prefs.talkVoice(this)
+            t.voices?.firstOrNull { it.name == chosen }?.let { t.voice = it; return }
             val loc = Locale.getDefault()
             val v = t.voices?.filter { it.locale.language == loc.language && !it.isNetworkConnectionRequired &&
                     !it.features.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
@@ -431,6 +442,27 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         state(S.PAUSED, why)
     }
 
+    /** They started talking over Philibert: stop and listen. While it was still thinking, what they
+     *  say now is added to what they had said (the answer to that is dropped). */
+    private fun bargedIn() {
+        when (s) {
+            S.SPEAKING -> { interruptReply(); listen() }
+            S.THINKING -> {
+                interruptReply()
+                val last = history.lastOrNull()
+                if (last != null && last.optString("role") == "user") {
+                    history.removeAt(history.size - 1)
+                    saveHistory()
+                    if (log.childCount > 0) log.removeViewAt(log.childCount - 1)
+                    heard.setLength(0)
+                    heard.append(last.optString("content"))
+                    listen(keepHeard = true)
+                } else listen()
+            }
+            else -> {}
+        }
+    }
+
     private fun orbTapped() {
         when (s) {
             S.LISTENING -> if (heard.isNotBlank() || caption.text.isNotBlank()) {
@@ -521,6 +553,8 @@ class TalkActivity : Activity(), RecognitionListener, TextToSpeech.OnInitListene
         job = null
         replyDone = true
         state(S.PAUSED, "Couldn't get an answer - tap the orb to try again", why.take(200))
+        tts?.speak("Sorry, I didn't get an answer from your computer. Tap the circle to try again.",
+            TextToSpeech.QUEUE_FLUSH, null, "fail")
         // the question stays in the history: tapping the orb and talking carries on from it
     }
 

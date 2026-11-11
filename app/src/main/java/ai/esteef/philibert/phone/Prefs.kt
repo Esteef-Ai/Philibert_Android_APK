@@ -47,6 +47,18 @@ object Prefs {
     fun talkPatience(c: Context): Long = sp(c).getLong("talk_patience", 1300L)
     fun setTalkPatience(c: Context, ms: Long) = sp(c).edit().putLong("talk_patience", ms).apply()
 
+    /** Talking over Philibert stops it and it listens. */
+    fun bargeIn(c: Context): Boolean = sp(c).getBoolean("talk_bargein", true)
+    fun setBargeIn(c: Context, on: Boolean) = sp(c).edit().putBoolean("talk_bargein", on).apply()
+
+    /** How much louder than Philibert's own (echo-cancelled) voice you must be to cut in, dB. */
+    fun bargeMargin(c: Context): Float = sp(c).getFloat("talk_barge_margin", 12f)
+    fun setBargeMargin(c: Context, db: Float) = sp(c).edit().putFloat("talk_barge_margin", db).apply()
+
+    /** The text-to-speech voice for Talk (its name), "" = the best one found. */
+    fun talkVoice(c: Context): String = sp(c).getString("talk_voice", "") ?: ""
+    fun setTalkVoice(c: Context, v: String) = sp(c).edit().putString("talk_voice", v).apply()
+
     /** Whatever was pasted (the sharing address, the phone page, with or without a slash) -> .../phone/ */
     fun normalize(raw: String): String {
         var a = raw.trim().replace(" ", "")

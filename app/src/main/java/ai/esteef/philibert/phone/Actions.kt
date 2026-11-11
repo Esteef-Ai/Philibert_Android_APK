@@ -32,6 +32,8 @@ object Actions {
     private val CAPS = listOf(
         Cap("set_alarm", listOf("hour", "minute", "label"), listOf("hour", "minute"),
             "Set an alarm in the Clock app. hour 0-23, minute 0-59 (6:30 pm = hour 18, minute 30)."),
+        Cap("next_alarm", listOf(), listOf(),
+            "When the next alarm goes off (any alarm app). For all the alarms: open_app Clock, then read_screen."),
         Cap("set_timer", listOf("minutes", "seconds", "label"), listOf(),
             "Start a countdown timer: give minutes and/or seconds."),
         Cap("open_app", listOf("name"), listOf("name"), "Open an app by its name, e.g. Spotify, Plex, Maps, Camera."),
@@ -120,6 +122,17 @@ object Actions {
                 a.str("label").takeIf { it.isNotEmpty() }?.let { i.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
                 start(c, i)
                 "Alarm set for %d:%02d%s.".format(h, m, a.str("label").let { if (it.isEmpty()) "" else " ($it)" })
+            }
+        }
+        "next_alarm" -> {
+            val next = c.getSystemService(android.app.AlarmManager::class.java).nextAlarmClock
+            if (next == null) "No alarm is set on the phone."
+            else {
+                val at = java.util.Date(next.triggerTime)
+                val day = java.text.SimpleDateFormat("EEEE d MMMM", Locale.getDefault()).format(at)
+                val time = android.text.format.DateFormat.getTimeFormat(c).format(at)
+                val mins = (next.triggerTime - System.currentTimeMillis()) / 60000
+                "The next alarm is $day at $time (in ${mins / 60} h ${mins % 60} min)."
             }
         }
         "set_timer" -> {

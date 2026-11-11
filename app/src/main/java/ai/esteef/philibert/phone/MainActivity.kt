@@ -295,6 +295,33 @@ class MainActivity : Activity() {
         choices("Wait after I stop talking", listOf("Short" to 800L, "Normal" to 1300L, "Long" to 2200L, "Longer" to 3500L),
             Prefs.talkPatience(this)) { Prefs.setTalkPatience(this, it as Long) }
         note("Longer lets you pause to think mid-idea without Philibert jumping in.")
+        col.addView(Switch(this).apply {
+            text = "Cut in by talking"
+            setTextColor(getColor(R.color.txt))
+            isChecked = Prefs.bargeIn(this@MainActivity)
+            setPadding(0, (10 * dp).toInt(), 0, 0)
+            setOnCheckedChangeListener { _, on -> Prefs.setBargeIn(this@MainActivity, on) }
+        })
+        note("Start talking while Philibert speaks and it stops and listens - to steer it somewhere else. If it stops by itself (it heard its own voice, or the car), choose Less sensitive.")
+        choices("Cutting in", listOf("More sensitive" to 8f, "Normal" to 12f, "Less sensitive" to 17f),
+            Prefs.bargeMargin(this)) { Prefs.setBargeMargin(this, it as Float) }
+        col.addView(TextView(this).apply {
+            text = "Voice"; setTextColor(getColor(R.color.txt)); textSize = 15f
+            setPadding(0, (12 * dp).toInt(), 0, (2 * dp).toInt())
+        })
+        note(Prefs.talkVoice(this).ifEmpty { "The best voice on the phone, chosen for you" })
+        val vrow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        vrow.addView(Button(this).apply { text = "Choose a voice"; isAllCaps = false; setOnClickListener { chooseVoice() } },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        vrow.addView(Button(this).apply {
+            text = "Get more voices"; isAllCaps = false
+            setOnClickListener {
+                try { startActivity(Intent("com.android.settings.TTS_SETTINGS")) }
+                catch (e: Exception) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        col.addView(vrow)
+        note("Voices marked \"online\" are Google's most natural ones but need mobile data; the others work anywhere. More voices: Get more voices > Speech Services by Google > Install voice data.")
 
         val scroll = ScrollView(this).apply {
             setBackgroundColor(getColor(R.color.bg))
@@ -302,6 +329,58 @@ class MainActivity : Activity() {
         }
         setup = scroll
         body.addView(scroll)
+    }
+
+    // ---- Talk's voice --------------------------------------------------------------------------------------
+    private var tts: android.speech.tts.TextToSpeech? = null
+
+    /** Every voice for the phone's language; tapping one plays it, OK keeps it. */
+    private fun chooseVoice() {
+        tts?.shutdown()
+        var t: android.speech.tts.TextToSpeech? = null
+        t = android.speech.tts.TextToSpeech(this) { status ->
+            ui.post {
+                val e = t ?: return@post
+                if (status != android.speech.tts.TextToSpeech.SUCCESS) {
+                    android.widget.Toast.makeText(this, "The phone's text-to-speech isn't working.", android.widget.Toast.LENGTH_LONG).show()
+                    return@post
+                }
+                val lang = java.util.Locale.getDefault().language
+                val voices = (e.voices ?: emptySet()).filter {
+                    it.locale.language == lang &&
+                        !it.features.contains(android.speech.tts.TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)
+                }.sortedWith(compareBy<android.speech.tts.Voice>({ it.locale.country != java.util.Locale.getDefault().country },
+                    { it.isNetworkConnectionRequired }, { -it.quality }, { it.name }))
+                if (voices.isEmpty()) {
+                    android.widget.Toast.makeText(this, "No voices for this language - use Get more voices.", android.widget.Toast.LENGTH_LONG).show()
+                    return@post
+                }
+                val labels = voices.mapIndexed { i, v ->
+                    val code = v.name.split('-').getOrNull(3)?.uppercase() ?: v.name
+                    "${i + 1}. ${v.locale.displayCountry.ifEmpty { v.locale.displayLanguage }} · $code" +
+                        (if (v.isNetworkConnectionRequired) " · online" else "") +
+                        (if (v.quality >= android.speech.tts.Voice.QUALITY_VERY_HIGH) " · best" else "")
+                }.toTypedArray()
+                var pick = voices.indexOfFirst { it.name == Prefs.talkVoice(this) }
+                e.setSpeechRate(Prefs.talkRate(this))
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Philibert's voice")
+                    .setSingleChoiceItems(labels, pick) { _, i ->
+                        pick = i
+                        e.voice = voices[i]
+                        e.speak("Hi, I'm Philibert. Okay, so what are we working on today?",
+                            android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "preview")
+                    }
+                    .setPositiveButton("Use this voice") { _, _ ->
+                        if (pick >= 0) Prefs.setTalkVoice(this, voices[pick].name)
+                        e.shutdown(); showSetup()
+                    }
+                    .setNeutralButton("Automatic") { _, _ -> Prefs.setTalkVoice(this, ""); e.shutdown(); showSetup() }
+                    .setNegativeButton("Cancel") { _, _ -> e.shutdown() }
+                    .show()
+            }
+        }
+        tts = t
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
